@@ -71,7 +71,7 @@ def predict(clf, rgb):
 clf = np.load('the_classifier.npz')
 
 print 'loaded classifier'
-filename = 'outside3.jpeg'
+filename = 'test2.jpg'
 
 test_rgb = cv2.imread(filename)
 result = predict(clf, test_rgb)

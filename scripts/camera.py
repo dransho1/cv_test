@@ -18,7 +18,7 @@ def image_callback(msg):
         print(e)
     else:
         # Save your OpenCV2 image as a jpeg 
-        cv2.imwrite('camera.jpg', cv2_img)
+        cv2.imwrite('test3.jpg', cv2_img)
 
 def main():
     rospy.init_node('image_listener')

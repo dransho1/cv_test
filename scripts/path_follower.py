@@ -300,38 +300,37 @@ class Controller:
         except CvBridgeError as e:
             print e
         else:
-            #code here to do more path detection stuff
+            #code here to do path detection
             result = self.predict(self.clf, test_rgb)
             img = result * 255
             img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
             #self.rgb_pub.publish(self.bridge.cv2_to_imgmsg(test_rgb, "bgr8"))
             edges = cv2.Canny(img_color,100,200)
             points = self.find_path(img, result)
-            if points != -1:
-                cv2.polylines(img_color, points, False, (0,0,255), 1, cv2.LINE_AA)
+            if points == -1:
+                rospy.loginfo('could not find path points!')
             else:
-                rospy.loginfo("couldn't find any points!")
-            #self.edges_pub.publish(self.bridge.cv2_to_imgmsg(edges, "mono8"))
-            self.path_pub.publish(self.bridge.cv2_to_imgmsg(img_color, "bgr8"))
-
-            # control
-            if self.avoid == 1:
-                self.state = 'avoid'
-                rospy.loginfo('avoidance set')
-            else:
-                self.state = 'following'
-                w = img_color.shape[1]
-                h = img_color.shape[0]
-                mid_y = (2*h)/5
-                end_y = (3*h)/5
-                new_points = points[0][mid_y:end_y]
-                x_avg, y_avg = np.mean(new_points, axis=0)
-                steer = int((x_avg/w)*180)
-                if abs(steer - STEER_NEUTRAL) > 25:
-                    self.turn = 1
-                self.controller.setAngle(STEER_SERVO, steer)
-                rospy.loginfo('img turn at rate: %d', steer)
-            
+                cv2.polylines(img_color, points, False, (0,0,255), 1, cv2.LINE_AA)            
+                #self.edges_pub.publish(self.bridge.cv2_to_imgmsg(edges, "mono8"))
+                self.path_pub.publish(self.bridge.cv2_to_imgmsg(img_color, "bgr8"))
+                # control
+                if self.avoid == 1:
+                    self.state = 'avoid'
+                    rospy.loginfo('avoidance set')
+                else:
+                    self.state = 'following'
+                    w = img_color.shape[1]
+                    h = img_color.shape[0]
+                    mid_y = (2*h)/5
+                    end_y = (3*h)/5
+                    new_points = points[0][mid_y:end_y]
+                    x_avg, y_avg = np.mean(new_points, axis=0)
+                    steer = int((x_avg/w)*180)
+                    steer = abs(180-steer)
+                    if abs(steer - STEER_NEUTRAL) > 25:
+                        self.turn = 1
+                    self.controller.setAngle(STEER_SERVO, steer)
+                    rospy.loginfo('img turn at rate: %d', steer)
             
             
             
