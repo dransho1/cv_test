@@ -70,8 +70,8 @@ class Controller:
         # image publisher
         self.rgb_pub = rospy.Publisher('cv_image/rgb', Image,)
         self.edges_pub = rospy.Publisher('cv_image/edges',Image)
+        self.img_color_pub = rospy.Publisher('cv_image/img_color',Image)
         self.path_pub = rospy.Publisher('cv_image/path',Image)
-        self.detected_pub = rospy.Publisher('cv_image/detected',Image)
         
         # start out in wandering state
         self.state = 'start'
@@ -134,7 +134,7 @@ class Controller:
         angle_max = scan.angle_max
         angle_inc = scan.angle_increment
         #rospy.loginfo('max range is: %f', max_range)
-        rospy.loginfo('min range is: %f', min_range)
+        #rospy.loginfo('min range is: %f', min_range)
         # simple avoidance won't work because blob callback is too frequent
         # need to prioritize avoidance
         if (min_range < 0.5):
@@ -170,9 +170,9 @@ class Controller:
         if (num == 0) or (maxBlob < 60) or (maxY < int(screen_width/3)):
             self.state = 'search'
             rospy.loginfo('searching')
-        elif (self.avoid == 1):
-            self.state = 'avoid'
-            rospy.loginfo('set avoid state')
+        #elif (self.avoid == 1):
+            #self.state = 'avoid'
+            #rospy.loginfo('set avoid state')
             #self.controller.setAngle(STEER_SERVO, self.avoid_angle) 
         else:
             self.state = 'following'
@@ -220,34 +220,77 @@ class Controller:
         left_row = edge_img[y_half,:x_half]
         right_row = edge_img[y_half,x_half+1:]
 
-        print len(left_row), x_half
+        #print len(left_row), x_half
 
         # find value going outwards that is zero/edge(255)x
-        i = x_half-1
+        i = abs(x_half)-1
         left_row_path_location = 0
+        rospy.loginfo('i is %d', i)
         while True:
             if left_row[i] == 255:
                 left_row_path_location = i
                 break
+            elif i < 0:
+                return -1
             i-=1
-        print 'left row path location is: ',left_row_path_location
+        #print 'left row path location is: ',left_row_path_location
         j = 0
         right_row_path_location = 0
         while True:
             if right_row[j] == 255:
                 right_row_path_location = j
                 break
+            elif i > x_half:
+                return -1
             j+=1
-        print 'right row path location is: ',right_row_path_location
+        #print 'right row path location is: ',right_row_path_location
 
         # location variables are pixels on row vector
         path_width = abs((x_half + right_row_path_location)-
                          left_row_path_location)
         path_center = math.ceil(path_width/2)
-
         #index of center of given row
         img_center = left_row_path_location + path_center 
         return int(img_center)
+
+    def find_path(self, img, result):
+        xrng = np.arange(img.shape[1], dtype=np.float32)
+
+        accum = result.astype(np.float32) * xrng[None,:]
+        ctrx = (accum.sum(axis=1) / result.sum(axis=1)).astype(np.int32)
+        ctry = np.arange(img.shape[0])
+
+        points = np.hstack((ctrx.reshape(-1,1), ctry.reshape(-1,1)))
+
+        edge_padded = np.hstack((
+            np.zeros((img.shape[0], 1), dtype=np.uint8),
+            result,
+            np.zeros((img.shape[0], 1), dtype=np.uint8)))
+
+        left_diff = cv2.absdiff(edge_padded[:,1:-1], edge_padded[:,:-2])
+        right_diff = cv2.absdiff(edge_padded[:,2:], edge_padded[:,1:-1])
+        diff = np.maximum(left_diff, right_diff)
+
+        # pre-initialize guess at path midpint to center of image
+        mid = img.shape[1]/2
+        xvals = []
+
+        # start at bottom of the image
+        for y in range(img.shape[0]-1, -1, -1):
+            # look at all nonzero pixels in the diff image left of current midpoint
+            left = np.nonzero(diff[y][:mid])[0]
+            # look at all nonzero pixels in the diff image right of the current midpoint
+            right = np.nonzero(diff[y][mid:])[0] + mid
+            # average the biggest left x coordinate with the smallest right x coordinate
+            if ((len(left) == 0) or (len(right)==0)):
+                return -1
+            mid = (left[-1] + right[0])/2
+            # append this
+            xvals.append(mid)
+
+        ctrx = np.array(xvals[::-1])
+        points2 = np.hstack((ctrx.reshape(-1,1), ctry.reshape(-1,1)))
+        return [points2]
 
     
     def img_callback(self, msg):
@@ -261,15 +304,35 @@ class Controller:
             result = self.predict(self.clf, test_rgb)
             img = result * 255
             img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-            self.rgb_pub.publish(self.bridge.cv2_to_imgmsg(img_color, "bgr8"))
+            #self.rgb_pub.publish(self.bridge.cv2_to_imgmsg(test_rgb, "bgr8"))
             edges = cv2.Canny(img_color,100,200)
-            center = self.find_path_center(edges,y_half, x_half)
-            radius = 20
-            cv2.circle(img_color, (center, y_half), radius, (0,0,255))
-            self.path_pub.publish(self.bridge.cv2_to_imgmsg(img, "bgr8"))
-            self.edges_pub.publish(self.bridge.cv2_to_imgmsg(edges, "bgr8"))
-            self.detected_pub.publish(self.bridge.cv2_to_imgmsg(img_color,
-                                                                "bgr8"))
+            points = self.find_path(img, result)
+            if points != -1:
+                cv2.polylines(img_color, points, False, (0,0,255), 1, cv2.LINE_AA)
+            else:
+                rospy.loginfo("couldn't find any points!")
+            #self.edges_pub.publish(self.bridge.cv2_to_imgmsg(edges, "mono8"))
+            self.path_pub.publish(self.bridge.cv2_to_imgmsg(img_color, "bgr8"))
+
+            # control
+            if self.avoid == 1:
+                self.state = 'avoid'
+                rospy.loginfo('avoidance set')
+            else:
+                self.state = 'following'
+                w = img_color.shape[1]
+                h = img_color.shape[0]
+                mid_y = (2*h)/5
+                end_y = (3*h)/5
+                new_points = points[0][mid_y:end_y]
+                x_avg, y_avg = np.mean(new_points, axis=0)
+                steer = int((x_avg/w)*180)
+                if abs(steer - STEER_NEUTRAL) > 25:
+                    self.turn = 1
+                self.controller.setAngle(STEER_SERVO, steer)
+                rospy.loginfo('img turn at rate: %d', steer)
+            
+            
             
             
     # called 10 times per second
@@ -302,7 +365,7 @@ class Controller:
                 thr = 45
             self.controller.setPosition(ESC_SERVO, MOTOR_NEUTRAL +
                                         int(math.ceil(1.5*thr)))
-            rospy.loginfo('throttle is: %d',thr)
+            #rospy.loginfo('throttle is: %d',thr)
         elif self.state == 'avoid':
             rospy.loginfo('avoidance activated')
             thr = 50

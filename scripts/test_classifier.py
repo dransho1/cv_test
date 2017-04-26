@@ -26,7 +26,7 @@ def find_path_center(edge_img, y_half, x_half):
     left_row = edge_img[y_half,:x_half]
     right_row = edge_img[y_half,x_half+1:]
 
-    print len(left_row), x_half
+    #print len(left_row), x_half
 
     # find value going outwards that is zero/edge(255)x
     i = x_half-1
@@ -36,7 +36,7 @@ def find_path_center(edge_img, y_half, x_half):
             left_row_path_location = i
             break
         i-=1
-    print 'left row path location is: ',left_row_path_location
+    #print 'left row path location is: ',left_row_path_location
     j = 0
     right_row_path_location = 0
     while True:
@@ -44,7 +44,7 @@ def find_path_center(edge_img, y_half, x_half):
             right_row_path_location = j
             break
         j+=1
-    print 'right row path location is: ',right_row_path_location
+    #print 'right row path location is: ',right_row_path_location
 
     # location variables are pixels on row vector
     path_width = abs((x_half + right_row_path_location)-left_row_path_location)
@@ -71,32 +71,94 @@ def predict(clf, rgb):
 clf = np.load('the_classifier.npz')
 
 print 'loaded classifier'
-filename = 'outside2.jpeg'
+filename = 'outside3.jpeg'
 
 test_rgb = cv2.imread(filename)
 result = predict(clf, test_rgb)
 
 img = result * 255
 img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-    
+
+#############################
+# 0 1 2 ... w-1
+xrng = np.arange(img.shape[1], dtype=np.float32)
+
+accum = result.astype(np.float32) * xrng[None,:]
+ctrx = (accum.sum(axis=1) / result.sum(axis=1)).astype(np.int32)
+ctry = np.arange(img.shape[0])
+
+points = np.hstack((ctrx.reshape(-1,1), ctry.reshape(-1,1)))
+print points.shape, points.dtype
+
+edge_padded = np.hstack((
+    np.zeros((img.shape[0], 1), dtype=np.uint8),
+    result,
+    np.zeros((img.shape[0], 1), dtype=np.uint8)))
+
+left_diff = cv2.absdiff(edge_padded[:,1:-1], edge_padded[:,:-2])
+right_diff = cv2.absdiff(edge_padded[:,2:], edge_padded[:,1:-1])
+diff = np.maximum(left_diff, right_diff)
+
+# pre-initialize guess at path midpint to center of image
+mid = img.shape[1]/2
+xvals = []
+
+# start at bottom of the image
+for y in range(img.shape[0]-1, -1, -1):
+
+    # look at all nonzero pixels in the diff image left of current midpoint
+    left = np.nonzero(diff[y][:mid])[0]
+
+    # look at all nonzero pixels in the diff image right of the current midpoint
+    right = np.nonzero(diff[y][mid:])[0] + mid
+
+    # average the biggest left x coordinate with the smallest right x coordinate
+    mid = (left[-1] + right[0])/2
+
+    # append this
+    xvals.append(mid)
+
+ctrx = np.array(xvals[::-1])
+
+points2 = np.hstack((ctrx.reshape(-1,1), ctry.reshape(-1,1)))
+
+mid_y = (2*img.shape[0])/5
+end_y = (3*img.shape[0])/5
+print mid_y
+new_points = points2[mid_y:end_y]
+x_avg, y_avg = np.mean(new_points, axis=0)
+print 'average is', x_avg
+print (x_avg/640)*180
+
+
+#cv2.polylines(test_rgb, [points], False, (0,127,255), 1, cv2.LINE_AA)
+cv2.polylines(test_rgb, [points2], False, (0,0,255), 1, cv2.LINE_AA)
+
+#cv2.imshow('win', diff*255)
+#while np.uint8(cv2.waitKey(5)).view(np.int8) < 0: pass
+####################################
+
+  
 # view the two images and waitkey to exit
 print 'show img'
 cv2.imshow('win', np.hstack((test_rgb, img_color)))
 while np.uint8(cv2.waitKey(5)).view(np.int8) < 0: pass
 
 # canny egde detection to help with path realization
-print 'canny'
+#print 'canny'
 edges = cv2.Canny(img_color,100,200)
-cv2.imshow('win', edges)
-while np.uint8(cv2.waitKey(5)).view(np.int8) < 0: pass
+#cv2.imshow('win', edges)
+#while np.uint8(cv2.waitKey(5)).view(np.int8) < 0: pass
 
-print 'circles'
+#print 'circles'
 center = find_path_center(edges,y_half, x_half)
 radius = 20
 cv2.circle(img_color, (center, y_half), radius, (0,0,255))
 cv2.imshow('win', img_color)
 while np.uint8(cv2.waitKey(5)).view(np.int8) < 0: pass
 
+print 'center line is', x_avg
+print 'center circle is', center
 
 '''
 for filename in glob.glob('*.[jJ][pP][eE][gG]'):
